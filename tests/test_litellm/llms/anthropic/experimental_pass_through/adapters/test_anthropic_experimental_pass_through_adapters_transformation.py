@@ -15,6 +15,7 @@ from litellm.llms.anthropic.experimental_pass_through.adapters.transformation im
 )
 from litellm.types.llms.anthropic import (
     AnthopicMessagesAssistantMessageParam,
+    AnthropicMessagesRequest,
     AnthropicMessagesUserMessageParam,
 )
 from litellm.types.llms.openai import ChatCompletionAssistantToolCall
@@ -1913,6 +1914,106 @@ def test_translate_openai_response_to_anthropic_cache_tokens_from_prompt_tokens_
     assert anthropic_response["usage"]["input_tokens"] == 70
     assert anthropic_response["usage"]["output_tokens"] == 50
     assert anthropic_response["usage"]["cache_read_input_tokens"] == 30
+
+
+# =====================================================================
+# Forced Tool Choice With Thinking Tests
+# =====================================================================
+
+
+def test_translate_anthropic_to_openai_emulates_forced_tool_choice_with_thinking():
+    anthropic_request = AnthropicMessagesRequest(
+        model="claude-opus-4.7",
+        max_tokens=256,
+        messages=[
+            {
+                "role": "user",
+                "content": "Use camera_snapshot now.",
+            }
+        ],
+        thinking={"type": "enabled", "budget_tokens": 12000},
+        tools=[
+            {
+                "name": "camera_snapshot",
+                "description": "Capture a snapshot from the printer camera.",
+                "input_schema": {"type": "object", "properties": {}},
+            }
+        ],
+        tool_choice={"type": "tool", "name": "camera_snapshot"},
+    )
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    openai_request, _ = adapter.translate_anthropic_to_openai(
+        anthropic_message_request=anthropic_request
+    )
+
+    assert "tool_choice" not in openai_request
+    assert openai_request["thinking"] == {"type": "enabled", "budget_tokens": 12000}
+    assert openai_request["messages"][0]["role"] == "system"
+    assert "camera_snapshot" in openai_request["messages"][0]["content"]
+    assert openai_request["messages"][1]["role"] == "user"
+
+
+def test_translate_anthropic_to_openai_preserves_existing_system_when_emulating_tool_choice():
+    anthropic_request = AnthropicMessagesRequest(
+        model="github_copilot/claude-opus-4.7",
+        max_tokens=256,
+        system="Follow the operator policy.",
+        messages=[
+            {
+                "role": "user",
+                "content": "Use any available tool.",
+            }
+        ],
+        thinking={"type": "enabled", "budget_tokens": 12000},
+        tools=[
+            {
+                "name": "camera_snapshot",
+                "input_schema": {"type": "object", "properties": {}},
+            }
+        ],
+        tool_choice={"type": "any"},
+    )
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    openai_request, _ = adapter.translate_anthropic_to_openai(
+        anthropic_message_request=anthropic_request
+    )
+
+    system_content = openai_request["messages"][0]["content"]
+    assert "tool_choice" not in openai_request
+    assert isinstance(system_content, str)
+    assert "Follow the operator policy." in system_content
+    assert "call one of the available tools" in system_content
+
+
+def test_translate_anthropic_to_openai_keeps_wire_tool_choice_without_thinking():
+    anthropic_request = AnthropicMessagesRequest(
+        model="claude-opus-4.7",
+        max_tokens=256,
+        messages=[
+            {
+                "role": "user",
+                "content": "Use camera_snapshot now.",
+            }
+        ],
+        tools=[
+            {
+                "name": "camera_snapshot",
+                "input_schema": {"type": "object", "properties": {}},
+            }
+        ],
+        tool_choice={"type": "tool", "name": "camera_snapshot"},
+    )
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    openai_request, _ = adapter.translate_anthropic_to_openai(
+        anthropic_message_request=anthropic_request
+    )
+
+    assert openai_request["tool_choice"]["type"] == "function"
+    assert openai_request["tool_choice"]["function"]["name"] == "camera_snapshot"
+    assert openai_request["messages"][0]["role"] == "user"
 
 
 # =====================================================================

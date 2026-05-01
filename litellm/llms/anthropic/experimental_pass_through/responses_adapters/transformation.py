@@ -216,6 +216,43 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         return {"type": "auto"}
 
     @staticmethod
+    def should_emulate_forced_tool_choice(model: str) -> bool:
+        normalized = model.lower()
+        return (
+            "claude" in normalized
+            or "copilot" in normalized
+            or normalized.startswith("github_copilot/")
+        )
+
+    @staticmethod
+    def build_forced_tool_instruction(
+        tool_choice: AnthropicMessagesToolChoice,
+    ) -> Optional[str]:
+        tc_type = tool_choice.get("type")
+        if tc_type == "tool":
+            name = tool_choice.get("name")
+            if name:
+                return (
+                    "The client selected a required tool. You must call the tool "
+                    f"named `{name}` before producing any final answer."
+                )
+        if tc_type == "any":
+            return (
+                "The client selected required tool use. You must call one of the "
+                "available tools before producing any final answer."
+            )
+        return None
+
+    @staticmethod
+    def append_instruction(
+        existing: Optional[str],
+        addition: str,
+    ) -> str:
+        if existing:
+            return f"{existing}\n\n{addition}"
+        return addition
+
+    @staticmethod
     def translate_context_management_to_responses_api(
         context_management: Dict[str, Any],
     ) -> Optional[List[Dict[str, Any]]]:
@@ -327,11 +364,21 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         # tool_choice
         tool_choice = anthropic_request.get("tool_choice")
         if tool_choice:
-            responses_kwargs[
-                "tool_choice"
-            ] = self.translate_tool_choice_to_responses_api(
-                cast(AnthropicMessagesToolChoice, tool_choice)
-            )
+            typed_tool_choice = cast(AnthropicMessagesToolChoice, tool_choice)
+            forced_tool_instruction = None
+            if self.should_emulate_forced_tool_choice(model):
+                forced_tool_instruction = self.build_forced_tool_instruction(
+                    typed_tool_choice
+                )
+            if forced_tool_instruction:
+                responses_kwargs["instructions"] = self.append_instruction(
+                    cast(Optional[str], responses_kwargs.get("instructions")),
+                    forced_tool_instruction,
+                )
+            else:
+                responses_kwargs[
+                    "tool_choice"
+                ] = self.translate_tool_choice_to_responses_api(typed_tool_choice)
 
         # thinking -> reasoning
         thinking = anthropic_request.get("thinking")

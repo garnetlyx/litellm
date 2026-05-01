@@ -767,6 +767,61 @@ class LiteLLMAnthropicMessagesAdapter:
                 "Incompatible tool choice param submitted - {}".format(tool_choice)
             )
 
+    @staticmethod
+    def should_emulate_forced_tool_choice(model: str) -> bool:
+        normalized = model.lower()
+        return (
+            "claude" in normalized
+            or "copilot" in normalized
+            or normalized.startswith("github_copilot/")
+        )
+
+    @staticmethod
+    def build_forced_tool_instruction(
+        tool_choice: AnthropicMessagesToolChoice,
+    ) -> Optional[str]:
+        tc_type = tool_choice.get("type")
+        if tc_type == "tool":
+            name = tool_choice.get("name")
+            if name:
+                return (
+                    "The client selected a required tool. You must call the tool "
+                    f"named `{name}` before producing any final answer."
+                )
+        if tc_type == "any":
+            return (
+                "The client selected required tool use. You must call one of the "
+                "available tools before producing any final answer."
+            )
+        return None
+
+    @staticmethod
+    def is_thinking_enabled(thinking: Any) -> bool:
+        return isinstance(thinking, dict) and thinking.get("type") == "enabled"
+
+    def _append_system_instruction_to_messages(
+        self,
+        new_messages: List[AllMessageValues],
+        instruction: str,
+    ) -> None:
+        if (
+            new_messages
+            and new_messages[0].get("role") == "system"
+            and "content" in new_messages[0]
+        ):
+            content = new_messages[0].get("content")
+            if isinstance(content, str):
+                new_messages[0]["content"] = f"{content}\n\n{instruction}"  # type: ignore
+                return
+            if isinstance(content, list):
+                content.append({"type": "text", "text": instruction})
+                return
+
+        new_messages.insert(
+            0,
+            ChatCompletionSystemMessage(role="system", content=instruction),
+        )
+
     def translate_anthropic_tools_to_openai(
         self, tools: List[AllAnthropicToolsValues], model: Optional[str] = None
     ) -> Tuple[List[ChatCompletionToolParam], Dict[str, str]]:
@@ -941,15 +996,32 @@ class LiteLLMAnthropicMessagesAdapter:
             # metadata will be passed to litellm.acompletion(), it's a litellm_param
             new_kwargs["metadata"] = anthropic_message_request.pop("litellm_metadata")
 
+        thinking = anthropic_message_request.get("thinking")
+
         ## CONVERT TOOL CHOICE
         if "tool_choice" in anthropic_message_request:
             tool_choice = anthropic_message_request["tool_choice"]
             if tool_choice:
-                new_kwargs[
-                    "tool_choice"
-                ] = self.translate_anthropic_tool_choice_to_openai(
-                    tool_choice=cast(AnthropicMessagesToolChoice, tool_choice)
-                )
+                typed_tool_choice = cast(AnthropicMessagesToolChoice, tool_choice)
+                forced_tool_instruction = None
+                model = new_kwargs.get("model", "")
+                if (
+                    self.is_thinking_enabled(thinking)
+                    and self.should_emulate_forced_tool_choice(model)
+                ):
+                    forced_tool_instruction = self.build_forced_tool_instruction(
+                        typed_tool_choice
+                    )
+                if forced_tool_instruction:
+                    self._append_system_instruction_to_messages(
+                        new_messages, forced_tool_instruction
+                    )
+                else:
+                    new_kwargs[
+                        "tool_choice"
+                    ] = self.translate_anthropic_tool_choice_to_openai(
+                        tool_choice=typed_tool_choice
+                    )
         ## CONVERT TOOLS
         if "tools" in anthropic_message_request:
             tools = anthropic_message_request["tools"]
@@ -978,8 +1050,7 @@ class LiteLLMAnthropicMessagesAdapter:
                     )
 
         ## CONVERT THINKING
-        if "thinking" in anthropic_message_request:
-            thinking = anthropic_message_request["thinking"]
+        if thinking:
             if thinking:
                 model = new_kwargs.get("model", "")
                 if self.is_anthropic_claude_model(model):

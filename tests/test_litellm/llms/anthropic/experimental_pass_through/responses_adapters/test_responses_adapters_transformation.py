@@ -786,6 +786,31 @@ class TestTranslateRequestBroaderCoverage:
         kwargs = _ADAPTER.translate_request(req)
         assert kwargs["tool_choice"] == {"type": "function", "name": "do_thing"}
 
+    def test_copilot_forced_tool_choice_preserves_reasoning_without_wire_force(self):
+        req = _make_request(
+            model="claude-opus-4.7",
+            tools=[{"name": "do_thing"}],
+            tool_choice={"type": "tool", "name": "do_thing"},
+            thinking={"type": "enabled", "budget_tokens": 12000},
+        )
+        kwargs = _ADAPTER.translate_request(req)
+        assert "tool_choice" not in kwargs
+        assert kwargs["reasoning"] == {"effort": "high", "summary": "detailed"}
+        assert "required tool" in kwargs["instructions"]
+        assert "do_thing" in kwargs["instructions"]
+
+    def test_copilot_forced_tool_choice_appends_existing_system_instruction(self):
+        req = _make_request(
+            model="github_copilot/claude-opus-4.7",
+            system="You are concise.",
+            tools=[{"name": "do_thing"}],
+            tool_choice={"type": "tool", "name": "do_thing"},
+        )
+        kwargs = _ADAPTER.translate_request(req)
+        assert "tool_choice" not in kwargs
+        assert kwargs["instructions"].startswith("You are concise.\n\n")
+        assert "do_thing" in kwargs["instructions"]
+
     def test_thinking_translated_to_reasoning(self):
         req = _make_request(thinking={"type": "enabled", "budget_tokens": 12000})
         kwargs = _ADAPTER.translate_request(req)
