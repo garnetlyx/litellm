@@ -149,6 +149,17 @@ def add_shared_session_to_data(data: dict) -> None:
         pass
 
 
+def _tag_input_protocol(data: dict, route_type: str) -> None:
+    """Store the incoming public protocol for downstream deployment selection."""
+    metadata = data.get("metadata")
+    if not isinstance(metadata, dict):
+        metadata = {}
+        data["metadata"] = metadata
+    metadata["litellm_input_protocol"] = (
+        "anthropic" if route_type == "anthropic_messages" else "openai"
+    )
+
+
 async def route_request(  # noqa: PLR0915 - Complex routing function, refactoring tracked separately
     data: dict,
     llm_router: Optional[LitellmRouter],
@@ -249,6 +260,7 @@ async def route_request(  # noqa: PLR0915 - Complex routing function, refactorin
     Common helper to route the request
     """
     add_shared_session_to_data(data)
+    _tag_input_protocol(data, route_type)
 
     team_id = get_team_id_from_data(data)
     router_model_names = llm_router.model_names if llm_router is not None else []

@@ -226,6 +226,79 @@ async def test_async_get_available_deployment_for_pass_through():
     assert deployment["litellm_params"]["use_in_pass_through"] is True
 
 
+def test_get_available_deployment_for_pass_through_prefers_matching_protocol():
+    from litellm.router import Router
+
+    model_list = [
+        {
+            "model_name": "shared-model",
+            "litellm_params": {
+                "model": "openai/shared-model",
+                "api_base": "https://openai.example.com/v1",
+                "api_key": "test-openai-key",
+                "use_in_pass_through": True,
+            },
+            "model_info": {"id": "openai"},
+        },
+        {
+            "model_name": "shared-model",
+            "litellm_params": {
+                "model": "anthropic/shared-model",
+                "api_base": "https://anthropic.example.com/v1",
+                "api_key": "test-anthropic-key",
+                "use_in_pass_through": True,
+            },
+            "model_info": {"id": "anthropic"},
+        },
+    ]
+
+    router = Router(model_list=model_list, routing_strategy="simple-shuffle")
+
+    deployment = router.get_available_deployment_for_pass_through(
+        model="shared-model",
+        request_kwargs={"metadata": {"litellm_input_protocol": "anthropic"}},
+    )
+
+    assert deployment["model_info"]["id"] == "anthropic"
+
+
+@pytest.mark.asyncio
+async def test_async_get_available_deployment_for_pass_through_prefers_matching_protocol():
+    from litellm.router import Router
+
+    model_list = [
+        {
+            "model_name": "shared-model",
+            "litellm_params": {
+                "model": "github_copilot/gpt-5.4",
+                "api_base": "https://copilot.example.com/v1",
+                "api_key": "test-copilot-key",
+                "use_in_pass_through": True,
+            },
+            "model_info": {"id": "copilot"},
+        },
+        {
+            "model_name": "shared-model",
+            "litellm_params": {
+                "model": "anthropic/shared-model",
+                "api_base": "https://anthropic.example.com/v1",
+                "api_key": "test-anthropic-key",
+                "use_in_pass_through": True,
+            },
+            "model_info": {"id": "anthropic"},
+        },
+    ]
+
+    router = Router(model_list=model_list, routing_strategy="simple-shuffle")
+
+    deployment = await router.async_get_available_deployment_for_pass_through(
+        model="shared-model",
+        request_kwargs={"metadata": {"litellm_input_protocol": "anthropic"}},
+    )
+
+    assert deployment["model_info"]["id"] == "anthropic"
+
+
 @pytest.mark.asyncio
 async def test_vertex_passthrough_forwards_anthropic_beta_header():
     """
@@ -521,4 +594,3 @@ async def test_vertex_passthrough_custom_model_name_replaced_in_url():
             f"Custom model name should have been replaced in target URL. Got: {target_url}"
         assert "gemini-3-pro" in target_url, \
             f"Actual Vertex AI model name should be in target URL. Got: {target_url}"
-

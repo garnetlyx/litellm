@@ -204,6 +204,46 @@ else:
     PreRoutingHookResponse = Any
 
 
+def _get_protocol_preferred_deployments(
+    healthy_deployments: List[dict],
+    request_kwargs: Optional[Dict],
+) -> List[dict]:
+    """
+    Prefer deployments whose provider protocol matches the incoming request.
+
+    Falls back to the original healthy deployment list when there is no usable
+    protocol hint or no protocol-specific match.
+    """
+    if not request_kwargs or len(healthy_deployments) <= 1:
+        return healthy_deployments
+
+    metadata = request_kwargs.get("metadata")
+    if not isinstance(metadata, dict):
+        return healthy_deployments
+
+    input_protocol = metadata.get("litellm_input_protocol")
+    if input_protocol not in {"openai", "anthropic"}:
+        return healthy_deployments
+
+    def _target_protocol(deployment: dict) -> Optional[str]:
+        model_str = str((deployment.get("litellm_params") or {}).get("model") or "")
+        if "/" not in model_str:
+            return None
+        provider_prefix = model_str.split("/", 1)[0].strip().lower()
+        if provider_prefix in {"openai", "azure", "github_copilot"}:
+            return "openai"
+        if provider_prefix == "anthropic":
+            return "anthropic"
+        return None
+
+    preferred = [
+        deployment
+        for deployment in healthy_deployments
+        if _target_protocol(deployment) == input_protocol
+    ]
+    return preferred if preferred else healthy_deployments
+
+
 class RoutingArgs(enum.Enum):
     ttl = 60  # 1min (RPM/TPM expire key)
 
@@ -9060,6 +9100,11 @@ class Router:
             ):
                 return healthy_deployments[0]
 
+            healthy_deployments = _get_protocol_preferred_deployments(
+                healthy_deployments=healthy_deployments,
+                request_kwargs=request_kwargs,
+            )
+
             start_time = time.time()
             if (
                 self.routing_strategy == "usage-based-routing-v2"
@@ -9212,6 +9257,11 @@ class Router:
             # 4. Filter deployments that support pass-through
             pass_through_deployments = self._filter_pass_through_deployments(
                 healthy_deployments=healthy_deployments
+            )
+
+            pass_through_deployments = _get_protocol_preferred_deployments(
+                healthy_deployments=pass_through_deployments,
+                request_kwargs=request_kwargs,
             )
 
             if len(pass_through_deployments) == 0:
@@ -9390,6 +9440,11 @@ class Router:
                 request_kwargs=request_kwargs,
             )
 
+        healthy_deployments = _get_protocol_preferred_deployments(
+            healthy_deployments=healthy_deployments,
+            request_kwargs=request_kwargs,
+        )
+
         if len(healthy_deployments) == 0:
             model_ids = self.get_model_ids(model_name=model)
             _cooldown_time = self.cooldown_cache.get_min_cooldown(
@@ -9524,6 +9579,11 @@ class Router:
             healthy_deployments=healthy_deployments
         )
 
+        pass_through_deployments = _get_protocol_preferred_deployments(
+            healthy_deployments=pass_through_deployments,
+            request_kwargs=request_kwargs,
+        )
+
         if len(pass_through_deployments) == 0:
             # No deployments support pass-through
             raise litellm.BadRequestError(
@@ -9552,6 +9612,11 @@ class Router:
                 messages=messages,
                 request_kwargs=request_kwargs,
             )
+
+        pass_through_deployments = _get_protocol_preferred_deployments(
+            healthy_deployments=pass_through_deployments,
+            request_kwargs=request_kwargs,
+        )
 
         if len(pass_through_deployments) == 0:
             model_ids = self.get_model_ids(model_name=model)
